@@ -5,6 +5,7 @@ import path from "path";
 import readline from "readline";
 
 import { chromium } from "playwright";
+import AdmZip from "adm-zip";
 
 const GARMIN_SSO_URL =
   "https://sso.garmin.com/portal/sso/en-US/sign-in?clientId=GarminConnect&service=https://connect.garmin.com/app/activities";
@@ -13,12 +14,14 @@ const ACTIVITIES_API =
   "/gc-api/activitylist-service/activities/search/activities";
 const GPX_DOWNLOAD_API = "/gc-api/download-service/export/gpx/activity";
 const TCX_DOWNLOAD_API = "/gc-api/download-service/export/tcx/activity";
+const FIT_DOWNLOAD_API = "/gc-api/download-service/files/activity";
 const PAGE_SIZE = 20;
 const DOWNLOAD_DELAY_MS = 1500;
 const MAX_RETRIES = 5;
 const RETRY_DELAY_MS = 5000;
 const GPX_DIR = path.resolve("data/gpx");
 const TCX_DIR = path.resolve("data/tcx");
+const FIT_DIR = path.resolve("data/fit");
 
 async function prompt(question) {
   const rl = readline.createInterface({
@@ -288,6 +291,85 @@ async function downloadTcx(page, session, activityId, index, total, attempt = 0)
   return true;
 }
 
+async function downloadFit(page, session, activity, index, total, attempt = 0) {
+  const activityId = activity.activityId;
+  const startTime = activity.startTimeLocal || activity.beginTimestamp;
+  const timestamp = startTime
+    ? startTime.replace(/[: ]/g, (c) => (c === " " ? "-" : "-")).replace(/\..+$/, "")
+    : String(activityId);
+  const filePath = path.join(FIT_DIR, `${timestamp}.fit`);
+
+  if (fs.existsSync(filePath)) {
+    console.log(
+      `  [${index + 1}/${total}] Skipping ${activityId} (already downloaded)`,
+    );
+    return false;
+  }
+
+  const url = `${GARMIN_CONNECT_BASE}${FIT_DOWNLOAD_API}/${activityId}`;
+
+  const result = await page.evaluate(
+    async ({ fetchUrl, headers }) => {
+      const response = await fetch(fetchUrl, { headers });
+
+      if (!response.ok) {
+        return { error: true, status: response.status };
+      }
+
+      const buffer = await response.arrayBuffer();
+      const bytes = new Uint8Array(buffer);
+      let binary = "";
+      for (let i = 0; i < bytes.length; i++) {
+        binary += String.fromCharCode(bytes[i]);
+      }
+      return { error: false, data: btoa(binary) };
+    },
+    { fetchUrl: url, headers: session.headers },
+  );
+
+  if (result.error) {
+    if (result.status === 404) {
+      console.log(
+        `  [${index + 1}/${total}] Skipping ${activityId} (no FIT data available)`,
+      );
+      return false;
+    }
+
+    if (result.status === 401 && attempt < MAX_RETRIES) {
+      session.headers = await refreshApiHeaders(page);
+      return downloadFit(page, session, activity, index, total, attempt + 1);
+    }
+
+    if (result.status >= 500 && attempt < MAX_RETRIES) {
+      const delay = RETRY_DELAY_MS * Math.pow(2, attempt);
+      console.log(
+        `  [${index + 1}/${total}] Got ${result.status} for ${activityId}, retrying in ${delay / 1000}s (attempt ${attempt + 1}/${MAX_RETRIES})...`,
+      );
+      await sleep(delay);
+      return downloadFit(page, session, activity, index, total, attempt + 1);
+    }
+
+    throw new Error(
+      `Failed to download FIT for ${activityId} (status ${result.status})`,
+    );
+  }
+
+  const zipBuffer = Buffer.from(result.data, "base64");
+  const zip = new AdmZip(zipBuffer);
+  const fitEntry = zip.getEntries().find((e) => e.entryName.endsWith(".fit"));
+
+  if (!fitEntry) {
+    console.log(
+      `  [${index + 1}/${total}] Skipping ${activityId} (no .fit file in zip)`,
+    );
+    return false;
+  }
+
+  fs.writeFileSync(filePath, fitEntry.getData());
+  console.log(`  [${index + 1}/${total}] Downloaded ${activityId} → ${path.basename(filePath)}`);
+  return true;
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -362,6 +444,7 @@ async function main() {
 
     fs.mkdirSync(GPX_DIR, { recursive: true });
     fs.mkdirSync(TCX_DIR, { recursive: true });
+    fs.mkdirSync(FIT_DIR, { recursive: true });
 
     const activityIds = activities.map((a) => a.activityId);
     const session = { headers: apiHeaders };
@@ -396,6 +479,22 @@ async function main() {
 
       // delay between downloads to avoid rate limiting
       if (downloaded && i < activityIds.length - 1) {
+        await sleep(DOWNLOAD_DELAY_MS);
+      }
+    }
+
+    console.log(`\nDownloading FIT files to ${FIT_DIR}...\n`);
+
+    for (let i = 0; i < activities.length; i++) {
+      const downloaded = await downloadFit(
+        page,
+        session,
+        activities[i],
+        i,
+        activities.length,
+      );
+
+      if (downloaded && i < activities.length - 1) {
         await sleep(DOWNLOAD_DELAY_MS);
       }
     }
