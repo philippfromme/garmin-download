@@ -111,13 +111,17 @@ async function captureApiHeaders(page) {
   });
 }
 
-async function fetchActivities(page, apiHeaders) {
+async function fetchActivities(page, apiHeaders, limit = null) {
   console.log("Fetching activities...");
 
   const activities = [];
   let start = 0;
 
   while (true) {
+    if (limit !== null && activities.length >= limit) {
+      break;
+    }
+
     const url = `${GARMIN_CONNECT_BASE}${ACTIVITIES_API}?start=${start}&limit=${PAGE_SIZE}`;
 
     const result = await page.evaluate(
@@ -376,8 +380,61 @@ function sleep(ms) {
 
 const BROWSER_DATA_DIR = path.resolve(".browser-data");
 
+function parseFormats() {
+  const idx = process.argv.indexOf("--formats");
+
+  if (idx === -1) {
+    return ["gpx", "tcx", "fit"];
+  }
+
+  const value = process.argv[idx + 1];
+
+  if (!value || value.startsWith("--")) {
+    console.error("Error: --formats requires a comma-separated list (e.g. --formats fit,gpx)");
+    process.exit(1);
+  }
+
+  const formats = value.split(",").map((f) => f.trim().toLowerCase());
+  const valid = ["gpx", "tcx", "fit"];
+
+  for (const f of formats) {
+    if (!valid.includes(f)) {
+      console.error(`Error: unknown format "${f}". Valid formats: ${valid.join(", ")}`);
+      process.exit(1);
+    }
+  }
+
+  return formats;
+}
+
+function parseLimit() {
+  const idx = process.argv.indexOf("--last");
+
+  if (idx === -1) {
+    return null;
+  }
+
+  const value = process.argv[idx + 1];
+
+  if (!value || value.startsWith("--")) {
+    console.error("Error: --last requires a positive integer (e.g. --last 10)");
+    process.exit(1);
+  }
+
+  const n = Number(value);
+
+  if (!Number.isInteger(n) || n <= 0) {
+    console.error(`Error: --last must be a positive integer, got "${value}"`);
+    process.exit(1);
+  }
+
+  return n;
+}
+
 async function main() {
   const headed = process.argv.includes("--headed");
+  const formats = parseFormats();
+  const limit = parseLimit();
 
   let email = process.env.GARMIN_EMAIL;
   let password = process.env.GARMIN_PASSWORD;
@@ -435,67 +492,84 @@ async function main() {
 
     console.log("Captured API auth headers.");
 
-    const activities = await fetchActivities(page, apiHeaders);
+    const allActivities = await fetchActivities(page, apiHeaders, limit);
 
-    if (activities.length === 0) {
+    if (allActivities.length === 0) {
       console.log("No activities found.");
       return;
     }
 
-    fs.mkdirSync(GPX_DIR, { recursive: true });
-    fs.mkdirSync(TCX_DIR, { recursive: true });
-    fs.mkdirSync(FIT_DIR, { recursive: true });
+    const activities =
+      limit !== null ? allActivities.slice(0, limit) : allActivities;
+
+    if (limit !== null) {
+      console.log(
+        `Limiting to the ${activities.length} most recent activities.`,
+      );
+    }
 
     const activityIds = activities.map((a) => a.activityId);
     const session = { headers: apiHeaders };
 
-    console.log(`\nDownloading GPX files to ${GPX_DIR}...\n`);
+    console.log(`Formats: ${formats.join(", ")}`);
 
-    for (let i = 0; i < activityIds.length; i++) {
-      const downloaded = await downloadGpx(
-        page,
-        session,
-        activityIds[i],
-        i,
-        activityIds.length,
-      );
+    if (formats.includes("gpx")) {
+      fs.mkdirSync(GPX_DIR, { recursive: true });
 
-      // delay between downloads to avoid rate limiting
-      if (downloaded && i < activityIds.length - 1) {
-        await sleep(DOWNLOAD_DELAY_MS);
+      console.log(`\nDownloading GPX files to ${GPX_DIR}...\n`);
+
+      for (let i = 0; i < activityIds.length; i++) {
+        const downloaded = await downloadGpx(
+          page,
+          session,
+          activityIds[i],
+          i,
+          activityIds.length,
+        );
+
+        if (downloaded && i < activityIds.length - 1) {
+          await sleep(DOWNLOAD_DELAY_MS);
+        }
       }
     }
 
-    console.log(`\nDownloading TCX files to ${TCX_DIR}...\n`);
+    if (formats.includes("tcx")) {
+      fs.mkdirSync(TCX_DIR, { recursive: true });
 
-    for (let i = 0; i < activityIds.length; i++) {
-      const downloaded = await downloadTcx(
-        page,
-        session,
-        activityIds[i],
-        i,
-        activityIds.length,
-      );
+      console.log(`\nDownloading TCX files to ${TCX_DIR}...\n`);
 
-      // delay between downloads to avoid rate limiting
-      if (downloaded && i < activityIds.length - 1) {
-        await sleep(DOWNLOAD_DELAY_MS);
+      for (let i = 0; i < activityIds.length; i++) {
+        const downloaded = await downloadTcx(
+          page,
+          session,
+          activityIds[i],
+          i,
+          activityIds.length,
+        );
+
+        if (downloaded && i < activityIds.length - 1) {
+          await sleep(DOWNLOAD_DELAY_MS);
+        }
       }
     }
 
-    console.log(`\nDownloading FIT files to ${FIT_DIR}...\n`);
+    if (formats.includes("fit")) {
+      fs.mkdirSync(FIT_DIR, { recursive: true });
 
-    for (let i = 0; i < activities.length; i++) {
-      const downloaded = await downloadFit(
-        page,
-        session,
-        activities[i],
-        i,
-        activities.length,
-      );
+      console.log(`\nDownloading FIT files to ${FIT_DIR}...\n`);
 
-      if (downloaded && i < activities.length - 1) {
-        await sleep(DOWNLOAD_DELAY_MS);
+      for (let i = 0; i < activities.length; i++) {
+        const downloaded = await downloadFit(
+          page,
+          session,
+          activities[i],
+          i,
+          activities.length,
+        );
+
+        if (downloaded && i < activities.length - 1) {
+          await sleep(DOWNLOAD_DELAY_MS);
+        }
       }
     }
 

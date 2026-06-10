@@ -4,7 +4,9 @@
   "type": "module",
   "scripts": {
     "download": "node scripts/download.js",
-    "download:headed": "node scripts/download.js --headed"
+    "download:headed": "node scripts/download.js --headed",
+    "download:fit": "node scripts/download.js --formats fit",
+    "download:last": "node scripts/download.js --last"
   },
   "keywords": [],
   "author": "Philipp Fromme",
