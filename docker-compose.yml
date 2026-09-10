@@ -1,0 +1,37 @@
+services:
+  garmin-download:
+    build: .
+    image: garmin-download
+    container_name: garmin-download
+    env_file: .env
+    environment:
+      # Chrome's sandbox can't run as root inside the container
+      BROWSER_NO_SANDBOX: "1"
+    # recommended by Playwright to avoid Chromium running out of shared memory
+    ipc: host
+    volumes:
+      # persists the logged-in Garmin session between runs (seed this once)
+      - ./.browser-data:/app/.browser-data
+      # shared with the Traverse container, which watches this folder and
+      # rebuilds its index automatically when new FIT files appear
+      - /home/philippfromme/docker/traverse/data:/app/data
+    # this is a run-and-exit job, not a long-running service
+    restart: "no"
+
+  # scheduler: starts the (stopped) garmin-download container on a schedule,
+  # reusing its env and volumes above — no config duplicated here
+  ofelia:
+    image: mcuadros/ofelia:latest
+    container_name: ofelia
+    command: daemon --docker
+    restart: unless-stopped
+    depends_on:
+      - garmin-download
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    labels:
+      # 0.3.x cron format is: seconds minutes hours dom month dow -> 04:00 daily
+      ofelia.job-run.garmin-download.schedule: "0 0 4 * * *"
+      ofelia.job-run.garmin-download.container: "garmin-download"
+      # keep the container so it can be started again on the next run
+      ofelia.job-run.garmin-download.delete: "false"

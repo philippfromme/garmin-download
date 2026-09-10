@@ -439,17 +439,36 @@ async function main() {
   let email = process.env.GARMIN_EMAIL;
   let password = process.env.GARMIN_PASSWORD;
 
+  // browser channel is configurable so containers can use bundled Chromium;
+  // set BROWSER_CHANNEL="" to omit the channel entirely
+  const channel = process.env.BROWSER_CHANNEL ?? "chrome";
+
+  const browserArgs = ["--disable-blink-features=AutomationControlled"];
+
+  // Chrome's sandbox cannot start as root inside a container
+  if (process.env.BROWSER_NO_SANDBOX) {
+    browserArgs.push("--no-sandbox", "--disable-setuid-sandbox");
+  }
+
   // use a persistent browser context to:
   // 1. bypass bot detection (looks like a real browser)
   // 2. preserve cookies between runs (no re-login needed)
-  const context = await chromium.launchPersistentContext(BROWSER_DATA_DIR, {
+  const launchOptions = {
     headless: !headed,
-    channel: "chrome",
-    args: ["--disable-blink-features=AutomationControlled"],
+    args: browserArgs,
     viewport: { width: 1280, height: 720 },
     userAgent:
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36",
-  });
+  };
+
+  if (channel) {
+    launchOptions.channel = channel;
+  }
+
+  const context = await chromium.launchPersistentContext(
+    BROWSER_DATA_DIR,
+    launchOptions,
+  );
 
   const page = context.pages()[0] || (await context.newPage());
 

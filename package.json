@@ -6,7 +6,8 @@
     "download": "node scripts/download.js",
     "download:headed": "node scripts/download.js --headed",
     "download:fit": "node scripts/download.js --formats fit",
-    "download:last": "node scripts/download.js --last"
+    "download:last": "node scripts/download.js --last",
+    "release": "npx np --no-publish --no-tests"
   },
   "keywords": [],
   "author": "Philipp Fromme",

@@ -1,0 +1,7 @@
+node_modules/
+data/
+.browser-data/
+.env
+.git/
+*.log
+README.md
