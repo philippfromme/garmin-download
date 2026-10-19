@@ -1,12 +1,14 @@
 {
   "name": "download-garmin",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
     "download": "node scripts/download.js",
     "download:headed": "node scripts/download.js --headed",
     "download:fit": "node scripts/download.js --formats fit",
+    "download:wellness": "node scripts/download.js --wellness-only",
     "download:last": "node scripts/download.js --last",
+    "test": "node --test",
     "release": "npx np --no-publish --no-tests"
   },
   "keywords": [],

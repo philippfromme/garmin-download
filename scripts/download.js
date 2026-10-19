@@ -6,6 +6,7 @@ import readline from "readline";
 
 import { chromium } from "playwright";
 import AdmZip from "adm-zip";
+import { downloadWellness, wellnessDates } from "./wellness.js";
 
 const GARMIN_SSO_URL =
   "https://sso.garmin.com/portal/sso/en-US/sign-in?clientId=GarminConnect&service=https://connect.garmin.com/app/activities";
@@ -22,6 +23,7 @@ const RETRY_DELAY_MS = 5000;
 const GPX_DIR = path.resolve("data/gpx");
 const TCX_DIR = path.resolve("data/tcx");
 const FIT_DIR = path.resolve("data/fit");
+const WELLNESS_DIR = path.resolve("data/wellness");
 
 async function prompt(question) {
   const rl = readline.createInterface({
@@ -174,6 +176,39 @@ async function refreshApiHeaders(page) {
   const newHeaders = await headersPromise;
   console.log("  Session refreshed.");
   return newHeaders;
+}
+
+async function fetchGarminJson(page, session, route, attempt = 0) {
+  const result = await page.evaluate(
+    async ({ fetchUrl, headers }) => {
+      const response = await fetch(fetchUrl, { headers });
+      if (response.status === 204 || response.status === 404) {
+        return { status: response.status, data: null };
+      }
+      if (!response.ok) return { status: response.status };
+      if (!response.headers.get("content-type")?.includes("json")) {
+        return { status: response.status, invalidContentType: true };
+      }
+      return { status: response.status, data: await response.json() };
+    },
+    { fetchUrl: `${GARMIN_CONNECT_BASE}${route}`, headers: session.headers },
+  );
+
+  if ((result.status === 401 || result.status === 403) && attempt === 0) {
+    session.headers = await refreshApiHeaders(page);
+    return fetchGarminJson(page, session, route, attempt + 1);
+  }
+  if ((result.status === 429 || result.status >= 500) && attempt < MAX_RETRIES) {
+    await sleep(RETRY_DELAY_MS * Math.pow(2, attempt));
+    return fetchGarminJson(page, session, route, attempt + 1);
+  }
+  if (result.invalidContentType) {
+    throw new Error(`Garmin returned non-JSON data for ${route}`);
+  }
+  if (result.status >= 400) {
+    throw new Error(`Garmin request failed for ${route} (status ${result.status})`);
+  }
+  return result.data;
 }
 
 async function downloadGpx(page, session, activityId, index, total, attempt = 0) {
@@ -431,10 +466,33 @@ function parseLimit() {
   return n;
 }
 
+function parseWellnessOptions() {
+  const only = process.argv.includes("--wellness-only");
+  const enabled = !process.argv.includes("--no-wellness");
+  if (only && !enabled) throw new Error("--wellness-only cannot be combined with --no-wellness");
+
+  function value(flag) {
+    const index = process.argv.indexOf(flag);
+    if (index === -1) return undefined;
+    const next = process.argv[index + 1];
+    if (!next || next.startsWith("--")) throw new Error(`${flag} requires a value`);
+    return next;
+  }
+
+  const daysValue = value("--wellness-days");
+  const days = daysValue === undefined ? 7 : Number(daysValue);
+  const from = value("--wellness-from");
+  const to = value("--wellness-to");
+  const timeZone = process.env.GARMIN_TIME_ZONE || Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const dates = enabled ? wellnessDates({ days, from, to, timeZone }) : [];
+  return { enabled, only, dates, refresh: !from };
+}
+
 async function main() {
   const headed = process.argv.includes("--headed");
   const formats = parseFormats();
   const limit = parseLimit();
+  const wellness = parseWellnessOptions();
 
   let email = process.env.GARMIN_EMAIL;
   let password = process.env.GARMIN_PASSWORD;
@@ -511,7 +569,21 @@ async function main() {
 
     console.log("Captured API auth headers.");
 
-    const allActivities = await fetchActivities(page, apiHeaders, limit);
+    const session = { headers: apiHeaders };
+    if (wellness.enabled) {
+      console.log(`Downloading wellness data for ${wellness.dates.length} day(s)...`);
+      const result = await downloadWellness({
+        dates: wellness.dates,
+        outputDir: WELLNESS_DIR,
+        refresh: wellness.refresh,
+        fetchJson: (route) => fetchGarminJson(page, session, route),
+        delay: () => sleep(500),
+      });
+      console.log(`Wellness: ${result.downloaded} saved, ${result.skipped} already present.`);
+    }
+    if (wellness.only) return;
+
+    const allActivities = await fetchActivities(page, session.headers, limit);
 
     if (allActivities.length === 0) {
       console.log("No activities found.");
@@ -528,8 +600,6 @@ async function main() {
     }
 
     const activityIds = activities.map((a) => a.activityId);
-    const session = { headers: apiHeaders };
-
     console.log(`Formats: ${formats.join(", ")}`);
 
     if (formats.includes("gpx")) {

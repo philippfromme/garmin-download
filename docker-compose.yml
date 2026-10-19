@@ -7,6 +7,7 @@ services:
     environment:
       # Chrome's sandbox can't run as root inside the container
       BROWSER_NO_SANDBOX: "1"
+      GARMIN_TIME_ZONE: Europe/Berlin
     # recommended by Playwright to avoid Chromium running out of shared memory
     ipc: host
     volumes:
