@@ -66,6 +66,7 @@ export async function downloadWellness({ dates, fetchJson, outputDir, refresh = 
       skipped++;
       continue;
     }
+    console.log(`  Fetching wellness for ${date}...`);
     const data = { date };
     for (const [name, route] of WELLNESS_DATASETS) {
       data[name] = await fetchJson(route(date, profileId));

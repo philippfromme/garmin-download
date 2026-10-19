@@ -6,6 +6,7 @@ import readline from "readline";
 
 import { chromium } from "playwright";
 import AdmZip from "adm-zip";
+import { fetchGarminJson } from "./garmin-json.js";
 import { downloadWellness, wellnessDates } from "./wellness.js";
 
 const GARMIN_SSO_URL =
@@ -176,39 +177,6 @@ async function refreshApiHeaders(page) {
   const newHeaders = await headersPromise;
   console.log("  Session refreshed.");
   return newHeaders;
-}
-
-async function fetchGarminJson(page, session, route, attempt = 0) {
-  const result = await page.evaluate(
-    async ({ fetchUrl, headers }) => {
-      const response = await fetch(fetchUrl, { headers });
-      if (response.status === 204 || response.status === 404) {
-        return { status: response.status, data: null };
-      }
-      if (!response.ok) return { status: response.status };
-      if (!response.headers.get("content-type")?.includes("json")) {
-        return { status: response.status, invalidContentType: true };
-      }
-      return { status: response.status, data: await response.json() };
-    },
-    { fetchUrl: `${GARMIN_CONNECT_BASE}${route}`, headers: session.headers },
-  );
-
-  if ((result.status === 401 || result.status === 403) && attempt === 0) {
-    session.headers = await refreshApiHeaders(page);
-    return fetchGarminJson(page, session, route, attempt + 1);
-  }
-  if ((result.status === 429 || result.status >= 500) && attempt < MAX_RETRIES) {
-    await sleep(RETRY_DELAY_MS * Math.pow(2, attempt));
-    return fetchGarminJson(page, session, route, attempt + 1);
-  }
-  if (result.invalidContentType) {
-    throw new Error(`Garmin returned non-JSON data for ${route}`);
-  }
-  if (result.status >= 400) {
-    throw new Error(`Garmin request failed for ${route} (status ${result.status})`);
-  }
-  return result.data;
 }
 
 async function downloadGpx(page, session, activityId, index, total, attempt = 0) {
@@ -531,6 +499,24 @@ async function main() {
   const page = context.pages()[0] || (await context.newPage());
 
   let failed = false;
+  let interrupted = false;
+  const stop = (signal) => {
+    if (interrupted) return;
+    interrupted = true;
+    const exitCode = signal === "SIGINT" ? 130 : 143;
+    console.log(`\n${signal} received; closing Chrome...`);
+    const forceExit = setTimeout(() => process.exit(exitCode), 10_000);
+    void context.close().catch((error) => {
+      console.error("Could not close Chrome cleanly:", error.message);
+    }).finally(() => {
+      clearTimeout(forceExit);
+      process.exit(exitCode);
+    });
+  };
+  const onSigint = () => stop("SIGINT");
+  const onSigterm = () => stop("SIGTERM");
+  process.once("SIGINT", onSigint);
+  process.once("SIGTERM", onSigterm);
 
   try {
     // set up header capture BEFORE navigation so we catch the first API call
@@ -576,7 +562,12 @@ async function main() {
         dates: wellness.dates,
         outputDir: WELLNESS_DIR,
         refresh: wellness.refresh,
-        fetchJson: (route) => fetchGarminJson(page, session, route),
+        fetchJson: (route) => fetchGarminJson(page, session, route, {
+          refreshHeaders: () => refreshApiHeaders(page),
+          delay: sleep,
+          maxRetries: MAX_RETRIES,
+          retryDelayMs: RETRY_DELAY_MS,
+        }),
         delay: () => sleep(500),
       });
       console.log(`Wellness: ${result.downloaded} saved, ${result.skipped} already present.`);
@@ -664,19 +655,21 @@ async function main() {
 
     console.log("\nDone!");
   } catch (err) {
-    failed = true;
+    if (!interrupted) {
+      failed = true;
+      console.error("Error:", err.message);
+    }
 
-    console.error("Error:", err.message);
-
-    if (headed) {
+    if (headed && !interrupted) {
       console.log("\nBrowser left open for inspection. Press Ctrl+C to exit.");
       await new Promise(() => {}); // hang forever until user kills process
     }
   } finally {
-    await context.close();
-
-    if (failed) {
-      process.exit(1);
+    process.off("SIGINT", onSigint);
+    process.off("SIGTERM", onSigterm);
+    if (!interrupted) {
+      await context.close();
+      if (failed) process.exit(1);
     }
   }
 }

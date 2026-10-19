@@ -36,6 +36,8 @@ npm run download:wellness -- --wellness-from 2026-01-01 --wellness-to 2026-10-19
 
 Existing files are skipped during a historical backfill, so the command can be resumed. Use `--wellness-days N` to change the rolling window, or `--no-wellness` to run activity downloads only. Set `GARMIN_TIME_ZONE` to the time zone used for Garmin calendar dates (for example, `Europe/Berlin`); otherwise the machine's local time zone is used.
 
+Each Garmin wellness request has a 30-second deadline. Transient failures are retried with a visible message; if all attempts fail, the command exits and leaves completed days intact. Rerun the same backfill command to continue. Ctrl+C closes Chrome before exiting. Do not run two downloader containers at once: they share one Chrome profile. If Chrome reports that its profile is locked and no downloader container is running, remove `.browser-data/SingletonLock`, `.browser-data/SingletonCookie`, and `.browser-data/SingletonSocket` before restarting.
+
 ## Running on a server with Docker
 
 Garmin's login is protected against automation (bot checks, CAPTCHA, MFA), so
