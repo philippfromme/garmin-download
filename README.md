@@ -1,116 +1,57 @@
 # garmin-download
 
-Downloads activities and daily wellness data from Garmin Connect using Playwright for browser automation.
+Downloads your Garmin Connect FIT activities and daily health data through Garmin's official [Personal API](https://developer.garmin.com/gc-developer-program/personal/personal-api/). No browser session or Garmin password is needed.
+
+## Setup
+
+Create a Personal API key in Garmin Connect and put it in this project's `.env`:
+
+```dotenv
+GARMIN_PERSONAL_API_KEY=your-key
+GARMIN_TIME_ZONE=Europe/Berlin
+```
+
+Keep `.env` private. Garmin displays the key only once. Keys expire after the period selected when you create them (at most one year); replace the key in `.env` before it expires. The downloader obtains a short-lived access token automatically for each run.
 
 ## Usage
 
-Set credentials via `.env` or enter them when prompted:
-
-```
-GARMIN_EMAIL=your@email.com
-GARMIN_PASSWORD=yourpassword
-```
-
 ```bash
-npm run download          # headless
-npm run download:headed   # with browser visible
-npm run download:fit      # FIT format only
-npm run download:last 10  # only the N most recent activities
-npm run download:wellness  # wellness only, last seven calendar days
-```
-
-Use `--last <n>` to limit the download to the n most recent activities:
-
-```bash
-npm run download -- --last 10
-npm run download:fit -- --last 5
-```
-
-Activities are saved to `data/gpx/`, `data/tcx/`, and `data/fit/`. Already-downloaded activities are skipped. Each run also saves the last seven days of wellness data to `data/wellness/YYYY-MM-DD.json`. These files contain Garmin's raw daily summary (including steps), step intervals, sleep, heart rate, stress and Body Battery, HRV, respiration, and Pulse Ox. Recent days are refreshed because Garmin may sync measurements later.
-
-For historical wellness data, run:
-
-```bash
+npm install
+npm run download                 # all FIT activities plus the last seven health days
+npm run download:fit             # FIT activities only
+npm run download:wellness        # health only, last seven days
+npm run download -- --last 10    # newest ten FIT activities plus health
 npm run download:wellness -- --wellness-from 2026-01-01 --wellness-to 2026-10-19
 ```
 
-Existing files are skipped during a historical backfill, so the command can be resumed. Use `--wellness-days N` to change the rolling window, or `--no-wellness` to run activity downloads only. Set `GARMIN_TIME_ZONE` to the time zone used for Garmin calendar dates (for example, `Europe/Berlin`); otherwise the machine's local time zone is used.
+`--wellness-days N` changes the rolling health window. `--no-wellness` skips health downloads. `--wellness-from` and optional `--wellness-to` select an inclusive historical range; already saved historical days are skipped, so a backfill can be resumed. Set `GARMIN_TIME_ZONE` to the zone used for Garmin calendar dates. `GARMIN_DATA_DIR` can point to another output root, for example for a test run.
 
-Each Garmin wellness request has a 30-second deadline. Transient failures are retried with a visible message; if all attempts fail, the command exits and leaves completed days intact. Rerun the same backfill command to continue. Ctrl+C closes Chrome before exiting. Do not run two downloader containers at once: they share one Chrome profile. If Chrome reports that its profile is locked and no downloader container is running, remove `.browser-data/SingletonLock`, `.browser-data/SingletonCookie`, and `.browser-data/SingletonSocket` before restarting.
+Activities are extracted from Garmin's original ZIP files into `data/fit/`. Existing FIT files are skipped. Daily health records go to `data/wellness/YYYY-MM-DD.json`. The last seven days are refreshed because late device syncs can change them. New records have `schemaVersion: 2` and contain the official daily summary, sleep, heart rate, HRV, and Pulse Ox responses. These provide the metrics used by Traverse's Health page. If a recent legacy health file is replaced, a one-time copy is saved as `YYYY-MM-DD.legacy.json` in the same directory. Older files remain usable in Traverse.
 
-## Running on a server with Docker
+Each request has a 30-second deadline. Transient network errors, HTTP 429, and server errors are retried. A failed health request leaves the existing daily file intact. A failed job exits nonzero so the scheduler can report it.
 
-Garmin's login is protected against automation (bot checks, CAPTCHA, MFA), so
-the container never logs in itself. Instead you log in **once** to create a
-saved session in `.browser-data/`, then the container reuses it on every run.
+## Docker
 
-### 1. Seed the session (once, on a machine with a display)
-
-```bash
-npm install
-npm run download:fit -- --last 5 -- --headed
-```
-
-This creates `.browser-data/` containing the authenticated Garmin session.
-
-### 2. Copy the project to the server
-
-Copy the project folder — including `.browser-data/` and a filled-in `.env` —
-to the server, e.g. `/opt/garmin-download`.
-
-### 3. Point the output at your Traverse data
-
-The `data` volume in `docker-compose.yml` is mapped to the folder the Traverse
-container reads from, so downloaded FIT files land where Traverse watches for
-them and its index rebuilds automatically:
-
-```yaml
-volumes:
-  - ./.browser-data:/app/.browser-data
-  - /home/philippfromme/docker/traverse/data:/app/data
-```
-
-### 4. Build and start
+The `data` volume in `docker-compose.yml` maps to Traverse's data directory. Adjust the host path to match your server, then run:
 
 ```bash
 docker compose up -d --build
 ```
 
-This builds the image, runs an initial download, and starts the Ofelia
-scheduler. `garmin-download` runs once and stops; Ofelia restarts that same
-stopped container on schedule (see the `ofelia.job-run` labels in
-`docker-compose.yml`, default 04:00 daily). Because Ofelia just starts the
-existing container, all credentials and volumes stay in the service definition —
-nothing is duplicated in the scheduler.
-
-To trigger a run manually or change the arguments:
+The downloader runs once and exits. Ofelia starts the stopped downloader container daily at 04:00. To run it manually:
 
 ```bash
-docker compose run --rm garmin-download            # default: FIT activities plus seven days of wellness
-docker compose run --rm garmin-download --last 20  # override arguments
+docker compose run --rm garmin-download
+docker compose run --rm garmin-download --last 20
 docker compose run --rm garmin-download --wellness-only --wellness-from 2026-01-01 --wellness-to 2026-10-19
 ```
 
-Check the scheduler and the last run:
-
-```bash
-docker logs ofelia            # scheduled-run history
-docker logs garmin-download   # output of the most recent download
-```
-
-The saved session lasts a long time but will eventually expire. When it does,
-the run fails instead of hanging — re-seed by repeating step 1 and copying the
-refreshed `.browser-data/` back to the server. Ofelia can email or Slack you on
-failures (see its logging drivers) so you know when to re-seed.
-
-The wellness routes are Garmin Connect's internal web endpoints. They can change without notice. A failed daily request leaves any previously saved JSON for that date intact, and the job exits with an error.
+The Personal API documents original activity files, but no GPX or TCX export endpoints. Existing GPX and TCX files are unaffected; this downloader produces FIT only.
 
 ## Releasing
 
-```
+```bash
 npm run release
 ```
 
-Uses [np](https://github.com/sindresorhus/np) to bump the version, create a git
-tag, and push. The GitHub Action then builds and publishes the Docker image to
-GHCR.
+This uses `np` to bump the version, create a tag, and push. The GitHub Action publishes the Docker image to GHCR.

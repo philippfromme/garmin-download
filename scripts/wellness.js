@@ -4,14 +4,11 @@ import path from "node:path";
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 export const WELLNESS_DATASETS = [
-  ["summary", (date, profileId) => `/gc-api/usersummary-service/usersummary/daily/${encodeURIComponent(profileId)}?calendarDate=${date}`],
-  ["steps", (date, profileId) => `/gc-api/wellness-service/wellness/dailySummaryChart/${encodeURIComponent(profileId)}?date=${date}`],
-  ["sleep", (date) => `/gc-api/sleep-service/sleep/dailySleepData?date=${date}&nonSleepBufferMinutes=60`],
-  ["heartRate", (date) => `/gc-api/wellness-service/wellness/dailyHeartRate?date=${date}`],
-  ["stressAndBodyBattery", (date) => `/gc-api/wellness-service/wellness/dailyStress/${date}`],
-  ["hrv", (date) => `/gc-api/hrv-service/hrv/${date}`],
-  ["respiration", (date) => `/gc-api/wellness-service/wellness/daily/respiration/${date}`],
-  ["pulseOx", (date) => `/gc-api/wellness-service/wellness/daily/spo2acclimation/${date}`],
+  ["summary", (date) => `/usersummary-service/usersummary/daily?calendarDate=${date}`],
+  ["sleep", (date) => `/sleep-service/sleep/dailySleep?date=${date}`],
+  ["heartRate", (date) => `/wellness-service/wellness/dailyHeartRate?date=${date}`],
+  ["hrv", (date) => `/hrv-service/hrv/${date}`],
+  ["pulseOx", (date) => `/wellness-service/wellness/daily/spo2acclimation/${date}`],
 ];
 
 export function validDate(value) {
@@ -49,14 +46,8 @@ export function wellnessDates({ days = 7, from, to, now = new Date(), timeZone =
   return dates;
 }
 
-export async function downloadWellness({ dates, fetchJson, outputDir, refresh = true, delay = async () => {} }) {
+export async function downloadWellness({ dates, client, outputDir, refresh = true, delay = async () => {} }) {
   if (dates.length === 0) return { downloaded: 0, skipped: 0 };
-  const profile = await fetchJson("/gc-api/userprofile-service/socialProfile");
-  const profileId = profile?.displayName;
-  if (typeof profileId !== "string" || !profileId.trim()) {
-    throw new Error("Garmin profile response did not contain a displayName");
-  }
-
   fs.mkdirSync(outputDir, { recursive: true });
   let downloaded = 0;
   let skipped = 0;
@@ -67,15 +58,23 @@ export async function downloadWellness({ dates, fetchJson, outputDir, refresh = 
       continue;
     }
     console.log(`  Fetching wellness for ${date}...`);
-    const data = { date };
+    const data = { schemaVersion: 2, date };
     for (const [name, route] of WELLNESS_DATASETS) {
-      data[name] = await fetchJson(route(date, profileId));
+      const value = await client.getJson(route(date));
+      data[name] = name === "sleep" ? { dailySleepDTO: value } : value;
       await delay();
     }
     // Only publish a complete day. A failed request leaves the previous file intact.
     const tempPath = `${filePath}.${process.pid}.tmp`;
     try {
       fs.writeFileSync(tempPath, JSON.stringify(data, null, 2) + "\n");
+      if (fs.existsSync(filePath)) {
+        const previous = JSON.parse(fs.readFileSync(filePath, "utf8"));
+        if (!previous.schemaVersion) {
+          const backupPath = path.join(outputDir, `${date}.legacy.json`);
+          if (!fs.existsSync(backupPath)) fs.copyFileSync(filePath, backupPath, fs.constants.COPYFILE_EXCL);
+        }
+      }
       fs.renameSync(tempPath, filePath);
     } finally {
       if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);

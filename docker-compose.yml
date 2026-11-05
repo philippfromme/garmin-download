@@ -5,14 +5,8 @@ services:
     container_name: garmin-download
     env_file: .env
     environment:
-      # Chrome's sandbox can't run as root inside the container
-      BROWSER_NO_SANDBOX: "1"
       GARMIN_TIME_ZONE: Europe/Berlin
-    # recommended by Playwright to avoid Chromium running out of shared memory
-    ipc: host
     volumes:
-      # persists the logged-in Garmin session between runs (seed this once)
-      - ./.browser-data:/app/.browser-data
       # shared with the Traverse container, which watches this folder and
       # rebuilds its index automatically when new FIT files appear
       - /home/philippfromme/docker/traverse/data:/app/data

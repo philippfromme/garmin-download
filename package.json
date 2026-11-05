@@ -4,8 +4,7 @@
   "type": "module",
   "scripts": {
     "download": "node scripts/download.js",
-    "download:headed": "node scripts/download.js --headed",
-    "download:fit": "node scripts/download.js --formats fit",
+    "download:fit": "node scripts/download.js --no-wellness",
     "download:wellness": "node scripts/download.js --wellness-only",
     "download:last": "node scripts/download.js --last",
     "test": "node --test",
@@ -16,9 +15,7 @@
   "license": "MIT",
   "description": "",
   "dependencies": {
-    "adm-zip": "^0.5.17",
-    "dotenv": "^17.3.1",
-    "fast-xml-parser": "^5.5.9",
-    "playwright": "^1.58.2"
+    "adm-zip": "^0.6.1",
+    "dotenv": "^17.3.1"
   }
 }
