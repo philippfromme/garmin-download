@@ -8,6 +8,6 @@ RUN npm ci --omit=dev
 
 COPY scripts ./scripts
 
-# run once and exit; scheduling is handled outside the container (host cron)
+# run once and exit; docker-compose.yml schedules restarts through Ofelia
 ENTRYPOINT ["node", "scripts/download.js"]
 CMD ["--last", "5"]

@@ -4,7 +4,7 @@ Downloads your Garmin Connect FIT activities and daily health data through Garmi
 
 ## Setup
 
-Create a Personal API key in Garmin Connect and put it in this project's `.env`:
+Create a Personal API key in Garmin Connect. Copy `.env.example` to `.env`, then set the key:
 
 ```dotenv
 GARMIN_PERSONAL_API_KEY=your-key
@@ -32,7 +32,7 @@ Each request has a 30-second deadline. Transient network errors, HTTP 429, and s
 
 ## Docker
 
-The `data` volume in `docker-compose.yml` maps to Traverse's data directory. Adjust the host path to match your server, then run:
+The supplied `docker-compose.yml` builds the image from this checkout and maps its `data` volume to Traverse's data directory. Adjust the host path to match your server, then run:
 
 ```bash
 docker compose up -d --build
@@ -54,4 +54,4 @@ The Personal API documents original activity files, but no GPX or TCX export end
 npm run release
 ```
 
-This uses `np` to bump the version, create a tag, and push. The GitHub Action publishes the Docker image to GHCR.
+This uses `np` to bump the version, create a tag, and push. A pushed `v*` tag makes the GitHub Action publish `ghcr.io/philippfromme/garmin-download` with the version and `latest` tags. Publishing does not update the server. The supplied Compose file builds locally; to deploy a GHCR image instead, change its `image` to the desired GHCR tag and remove `build`.

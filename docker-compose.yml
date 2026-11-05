@@ -5,7 +5,7 @@ services:
     container_name: garmin-download
     env_file: .env
     environment:
-      GARMIN_TIME_ZONE: Europe/Berlin
+      GARMIN_TIME_ZONE: ${GARMIN_TIME_ZONE:-Europe/Berlin}
     volumes:
       # shared with the Traverse container, which watches this folder and
       # rebuilds its index automatically when new FIT files appear
